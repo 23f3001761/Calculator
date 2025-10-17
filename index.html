@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Minimal Calculator</title>
+  <style>
+    :root{
+      --bg:#f4f6f8;
+      --panel:#ffffff;
+      --accent:#2b7cff;
+      --muted:#6b7280;
+      --light:#e6eefc;
+      --danger:#ef4444;
+      --shadow: 0 6px 18px rgba(20,20,30,0.06);
+      --font: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+    }
+    html,body{height:100%}
+    body{
+      margin:0;
+      font-family:var(--font);
+      background:linear-gradient(180deg,var(--bg),#eef2f7);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      padding:24px;
+      color:#111827;
+      -webkit-font-smoothing:antialiased;
+      -moz-osx-font-smoothing:grayscale;
+    }
+
+    .calc {
+      width:320px;
+      background:var(--panel);
+      border-radius:12px;
+      box-shadow:var(--shadow);
+      overflow:hidden;
+      display:flex;
+      flex-direction:column;
+      user-select:none;
+    }
+
+    .display {
+      padding:18px;
+      background:linear-gradient(180deg,#fbfdff,#f7fbff);
+      border-bottom:1px solid #eef2f7;
+    }
+
+    .expr {
+      font-size:14px;
+      color:var(--muted);
+      min-height:18px;
+      word-wrap:break-word;
+    }
+
+    .result {
+      margin-top:8px;
+      font-size:28px;
+      font-weight:600;
+      overflow:hidden;
+      text-overflow:ellipsis;
+      white-space:nowrap;
+    }
+
+    .kbd-hint {
+      margin-top:6px;
+      font-size:12px;
+      color:#9aa4b2;
+    }
+
+    .pad {
+      padding:12px;
+      display:grid;
+      grid-template-columns:repeat(4,1fr);
+      gap:10px;
+      background:transparent;
+    }
+
+    button.btn {
+      border:0;
+      border-radius:8px;
+      background:transparent;
+      padding:14px 10px;
+      font-size:16px;
+      cursor:pointer;
+      transition:all .12s ease;
+      box-shadow:none;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      color:#111827;
+    }
+
+    button.btn:hover { transform:translateY(-2px); }
+
+    .btn.op { background:var(--light); color:var(--accent); }
+    .btn.clear { background:#fff6f6; color:var(--danger); }
+    .btn.eq { background:var(--accent); color:white; grid-column: span 1; }
+    .btn.num { background:transparent; color:#111827; }
+    .btn.wide { grid-column: span 2; }
+
+    .small {
+      font-size:13px;
+      color:var(--muted);
+    }
+
+    footer {
+      padding:10px 12px;
+      font-size:12px;
+      color:var(--muted);
+      text-align:center;
+      background:transparent;
+      border-top:1px solid #f1f5f9;
+    }
+
+    /* Responsive */
+    @media (max-width:360px){
+      .calc{width:92vw}
+      .result{font-size:24px}
+    }
+  </style>
+</head>
+<body>
+  <div class="calc" role="application" aria-label="Minimal calculator">
+    <div class="display">
+      <div id="expr" class="expr" aria-live="polite">0</div>
+      <div id="result" class="result" aria-live="polite">0</div>
+      <div class="kbd-hint small">Use mouse or keyboard. Enter to evaluate, Backspace to delete.</div>
+    </div>
+
+    <div id="pad" class="pad" aria-hidden="false">
+      <!-- Buttons will be rendered here -->
+    </div>
+
+    <footer id="footer">Minimal Calculator</footer>
+  </div>
+
+  <script>
+    (function(){
+      // Default configuration and button layout
+      const defaultConfig = {
+        precision: 12,
+        themeColor: null,
+        footerText: "Minimal Calculator",
+      };
+
+      const defaultButtons = [
+        {label: "AC", type: "clear", value: "AC"},
+        {label: "⌫", type: "clear", value: "DEL"},
+        {label: "%", type: "op", value: "%"},
+        {label: "÷", type: "op", value: "÷"},
+
+        {label: "7", type: "num", value: "7"},
+        {label: "8", type: "num", value: "8"},
+        {label: "9", type: "num", value: "9"},
+        {label: "×", type: "op", value: "×"},
+
+        {label: "4", type: "num", value: "4"},
+        {label: "5", type: "num", value: "5"},
+        {label: "6", type: "num", value: "6"},
+        {label: "−", type: "op", value: "-"},
+
+        {label: "1", type: "num", value: "1"},
+        {label: "2", type: "num", value: "2"},
+        {label: "3", type: "num", value: "3"},
+        {label: "+", type: "op", value: "+"},
+
+        {label: "0", type: "num", value: "0", wide: true},
+        {label: ".", type: "num", value: "."},
+        {label: "=", type: "eq", value: "="}
+      ];
+
+      // Files to attempt to fetch from same directory - optional
+      const attemptFiles = ['calculator-config.json', 'buttons.json', 'operators.json'];
+
+      // App state
+      let config = Object.assign({}, defaultConfig);
+      let buttons = defaultButtons.slice();
+      let exprEl, resultEl, padEl, footerEl;
+      let expression = "";
+
+      // Utility: safe evaluate
+      function sanitizeExpression(raw) {
+        if (!raw) return "0";
+
+        // Replace symbols with JS operators
+        let s = raw.replace(/×/g, '*').replace(/÷/g, '/').replace(/−/g, '-');
+
+        // Replace occurrences of number% with (number/100)
+        // handle decimals: (\d+(\.\d+)?)
+        s = s.replace(/(\d+(\.\d+)?)%/g, '($1/100)');
+
+        // Remove multiple leading zeros (but keep "0." cases)
+        // Not strictly necessary.
+
+        // Validate allowed characters: digits, operators, parentheses, dot, spaces
+        if (!/^[0-9+\-*/().\s]+$/.test(s)) {
+          // Some other characters might slip in; reject
+          throw new Error("Invalid characters in expression");
+        }
+        return s;
+      }
+
+      function evaluateExpression(raw) {
+        if (!raw) return 0;
+        try {
+          const s = sanitizeExpression(raw);
+          // Avoid using eval directly; use Function
+          // Limit evaluation time/complexity is not possible here, but sanitize helps.
+          const val = Function('"use strict"; return (' + s + ')')();
+          if (typeof val === 'number' && isFinite(val)) {
+            // Round to configured precision
+            const p = Math.max(0, Math.min(15, config.precision || 12));
+            const factor = Math.pow(10, p);
+            const rounded = Math.round((val + Number.EPSILON) * factor) / factor;
+            // Remove trailing zeros
+            return String(rounded).replace(/(\.\d*[1-9])0+$|\.0+$/, '$1');
+          } else {
+            throw new Error("Result is not a finite number");
+          }
+        } catch (e) {
+          // Re-throw or return NaN indicator
+          throw e;
+        }
+      }
+
+      function renderDisplay() {
+        exprEl.textContent = expression || '0';
+        try {
+          const val = evaluateExpression(expression);
+          resultEl.textContent = val;
+          resultEl.style.color = '';
+        } catch (e) {
+          resultEl.textContent = "Error";
+          resultEl.style.color = 'var(--danger)';
+        }
+      }
+
+      function appendInput(val) {
+        // Prevent starting with multiple zeros like "00"
+        if (expression === "0" && val !== '.' && !isOperator(val)) {
+          expression = val;
+        } else {
+          expression += val;
+        }
+        renderDisplay();
+      }
+
+      function isOperator(v) {
+        return ['+', '-', '*', '/', '×', '÷', '%', '−'].includes(v);
+      }
+
+      function clearAll() {
+        expression = "";
+        renderDisplay();
+      }
+
+      function deleteLast() {
+        if (!expression) return;
+        expression = expression.slice(0, -1);
+        renderDisplay();
+      }
+
+      function handleEqual() {
+        try {
+          const val = evaluateExpression(expression);
+          expression = String(val);
+          renderDisplay();
+        } catch (e) {
+          resultEl.textContent = "Error";
+          resultEl.style.color = 'var(--danger)';
+        }
+      }
+
+      function createButton(b) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn ' + (b.type ? b.type : '');
+        if (b.wide) btn.classList.add('wide');
+        btn.textContent = b.label;
+        btn.setAttribute('data-value', b.value);
+        btn.setAttribute('aria-label', b.label);
+        btn.addEventListener('click', () => {
+          const v = b.value;
+          if (b.type === 'num') {
+            // Prevent multiple decimals in the current number
+            if (v === '.') {
+              // find last number token
+              const lastTokenMatch = expression.match(/(\d+(\.\d*)?)$/);
+              if (lastTokenMatch && lastTokenMatch[0].includes('.')) {
+                return; // ignore second decimal
+              }
+              if (!expression || /[+\-*/(]$/.test(expression)) {
+                // if expression is empty or ends with operator, prepend 0
+                expression += '0';
+              }
+            }
+            appendInput(v);
+          } else if (b.type === 'op') {
+            // Prevent consecutive operators
+            if (!expression && v !== '-') {
+              // allow starting negative sign
+              return;
+            }
+            if (expression && /[+\-*/%×÷]$/.test(expression)) {
+              // replace last operator
+              expression = expression.slice(0, -1) + v;
+            } else {
+              appendInput(v);
+            }
+          } else if (b.type === 'clear') {
+            if (v === 'AC') clearAll();
+            else if (v === 'DEL') deleteLast();
+          } else if (b.type === 'eq') {
+            handleEqual();
+          } else {
+            appendInput(v);
+          }
+        });
+        return btn;
+      }
+
+      // Attempt to fetch optional files present in same directory and apply overrides
+      async function fetchAttachments() {
+        const results = {};
+        for (const fname of attemptFiles) {
+          try {
+            const res = await fetch(fname, {cache: "no-store"});
+            if (!res.ok) continue;
+            const contentType = res.headers.get('content-type') || '';
+            if (contentType.indexOf('application/json') !== -1) {
+              const j = await res.json();
+              results[fname] = j;
+            } else {
+              // non-json content - read as text
+              const txt = await res.text();
+              results[fname] = txt;
+            }
+          } catch (e) {
+            // ignore missing files or fetch errors
+          }
+        }
+        return results;
+      }
+
+      async function init() {
+        exprEl = document.getElementById('expr');
+        resultEl = document.getElementById('result');
+        padEl = document.getElementById('pad');
+        footerEl = document.getElementById('footer');
+
+        // Load attachments (optional)
+        try {
+          const attachments = await fetchAttachments();
+          // Merge config if calculator-config.json found
+          if (attachments['calculator-config.json'] && typeof attachments['calculator-config.json'] === 'object') {
+            config = Object.assign(config, attachments['calculator-config.json']);
+          }
+          if (attachments['buttons.json'] && Array.isArray(attachments['buttons.json'])) {
+            // override buttons layout
+            buttons = attachments['buttons.json'].map(b => Object.assign({}, b));
+          }
+          // If an operators.json provides symbol mappings (optional)
+          if (attachments['operators.json'] && typeof attachments['operators.json'] === 'object') {
+            // Example usage: mapping keys to labels - not enforced, but could be used to substitute
+            // For simplicity, we won't deeply integrate, but allow a footer override if present.
+            if (attachments['operators.json'].footerText) {
+              config.footerText = attachments['operators.json'].footerText;
+            }
+          }
+        } catch (e) {
+          // ignore any errors and proceed with defaults
+        }
+
+        // Apply theme color if provided
+        if (config.themeColor) {
+          document.documentElement.style.setProperty('--accent', config.themeColor);
+        }
+        if (config.footerText) {
+          footerEl.textContent = config.footerText;
+        }
+
+        // Render buttons
+        padEl.innerHTML = '';
+        buttons.forEach(b => {
+          const btn = createButton(b);
+          padEl.appendChild(btn);
+        });
+
+        // Keyboard support
+        window.addEventListener('keydown', (ev) => {
+          if (ev.ctrlKey || ev.metaKey || ev.altKey) return; // ignore combos
+          const key = ev.key;
+          if ((key >= '0' && key <= '9') || key === '.') {
+            // numeric
+            // emulate pressing the matching button
+            const matching = buttons.find(x => x.type === 'num' && x.value === key);
+            if (matching) {
+              ev.preventDefault();
+              document.querySelector(`[data-value="${key}"]`)?.click();
+            }
+          } else if (key === 'Enter' || key === '=') {
+            ev.preventDefault();
+            const eqBtn = buttons.find(x => x.type === 'eq');
+            if (eqBtn) document.querySelector(`[data-value="${eqBtn.value}"]`)?.click();
+          } else if (key === 'Backspace') {
+            ev.preventDefault();
+            const del = buttons.find(x => x.value === 'DEL');
+            if (del) document.querySelector(`[data-value="DEL"]`)?.click();
+          } else if (key === 'Escape') {
+            ev.preventDefault();
+            const ac = buttons.find(x => x.value === 'AC');
+            if (ac) document.querySelector(`[data-value="AC"]`)?.click();
+          } else if (['+', '-', '*', '/','%'].includes(key)) {
+            ev.preventDefault();
+            // map * and / to our operators if not present symbol-wise
+            let mapped = key;
+            if (key === '*') mapped = '×';
+            if (key === '/') mapped = '÷';
+            const opBtn = buttons.find(x => x.type === 'op' && (x.value === key || x.value === mapped || x.label === key));
+            if (opBtn) {
+              document.querySelector(`[data-value="${opBtn.value}"]`)?.click();
+            } else {
+              // fallback: append symbol
+              appendInput(mapped);
+            }
+          }
+        });
+
+        // Initial render
+        renderDisplay();
+      }
+
+      // Start
+      document.addEventListener('DOMContentLoaded', init);
+    })();
+  </script>
+</body>
+</html>
